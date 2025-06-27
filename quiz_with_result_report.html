@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Quiz with PDF Result</title>
+    <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background: #f0f4f8;
+        margin: 0;
+        padding: 0;
+      }
+      #loginSection,
+      #uploadSection,
+      #quizSection,
+      #resultSection {
+        max-width: 900px;
+        margin: 20px auto;
+        background: white;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      }
+      input[type="text"],
+      input[type="file"],
+      button {
+        margin: 10px 0;
+        padding: 10px;
+        font-size: 16px;
+      }
+      button {
+        background: #007bff;
+        border: none;
+        color: white;
+        cursor: pointer;
+        border-radius: 5px;
+      }
+      button:hover {
+        background: #0056b3;
+      }
+      #questionNumbers {
+        max-width: 70px;
+        border-right: 1px solid #ddd;
+        overflow-y: auto;
+      }
+      #questionNumbers button {
+        display: block;
+        width: 100%;
+        margin-bottom: 5px;
+      }
+      #questionNumbers button.active {
+        background: #007bff;
+        color: white;
+      }
+      #questionNumbers button.answered {
+        background: #28a745;
+        color: white;
+      }
+      #quizContainer {
+        display: flex;
+        gap: 10px;
+      }
+      #questionContent {
+        flex: 4;
+        padding: 0 20px;
+      }
+      #studentDetails {
+        flex: 2;
+        border-left: 1px solid #ddd;
+        padding-left: 20px;
+        text-align: center;
+      }
+      #studentDetails img {
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        border: 3px solid #007bff;
+      }
+      #resultSection {
+        text-align: center;
+        display: none;
+      }
+      #resultSection button {
+        margin-top: 20px;
+        background: #dc3545;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="loginSection">
+      <h1>Student Login</h1>
+      <input type="text" id="studentName" placeholder="Enter Name" /><br />
+      <input type="text" id="rollNo" placeholder="Enter Roll Number" /><br />
+      <input type="file" id="studentImage" accept="image/*" /><br />
+      <button id="loginBtn">Login & Proceed</button>
+    </div>
+
+    <div id="uploadSection" style="display: none">
+      <h2>Upload Question Paper (.docx)</h2>
+      <input type="file" id="docxFile" accept=".docx" /><br />
+      <button id="uploadQuestionsBtn">Load Questions</button>
+    </div>
+
+    <div id="quizSection" style="display: none">
+      <div id="quizContainer">
+        <div id="questionNumbers"></div>
+        <div id="questionContent">
+          <h2 id="questionText"></h2>
+          <div id="optionsContainer"></div>
+          <div id="timer"></div>
+          <button id="submitQuizBtn">Submit Quiz</button>
+        </div>
+        <div id="studentDetails">
+          <img id="profileImage" /><br />
+          <h3 id="displayName"></h3>
+          <h4 id="displayRoll"></h4>
+          <h3>Score: <span id="scoreDisplay">0</span></h3>
+        </div>
+      </div>
+    </div>
+
+    <div id="resultSection">
+      <h2>Quiz Completed!</h2>
+      <img
+        id="resultImage"
+        style="
+          width: 120px;
+          height: 120px;
+          border-radius: 50%;
+          border: 3px solid #007bff;
+        "
+      /><br />
+      <h3 id="resultName"></h3>
+      <h4 id="resultRoll"></h4>
+      <h3>
+        Your Score: <span id="finalScore"></span> /
+        <span id="totalQuestions"></span>
+      </h3>
+      <button id="downloadPdfBtn">Download Result PDF</button>
+    </div>
+
+    <script>
+      let questions = [],
+        userAnswers = [],
+        currentQuestionIndex = 0,
+        timer,
+        timeLeft = 30,
+        score = 0;
+      let studentData = { name: "", roll: "", imageSrc: "" };
+
+      document.getElementById("loginBtn").onclick = () => {
+        const name = document.getElementById("studentName").value.trim();
+        const roll = document.getElementById("rollNo").value.trim();
+        const imgFile = document.getElementById("studentImage").files[0];
+        if (!name || !roll || !imgFile) return alert("All fields required!");
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          studentData = { name, roll, imageSrc: e.target.result };
+          document.getElementById("displayName").textContent = "Name: " + name;
+          document.getElementById("displayRoll").textContent =
+            "Roll No: " + roll;
+          document.getElementById("profileImage").src = e.target.result;
+          document.getElementById("loginSection").style.display = "none";
+          document.getElementById("uploadSection").style.display = "block";
+        };
+        reader.readAsDataURL(imgFile);
+      };
+
+      document.getElementById("uploadQuestionsBtn").onclick = () => {
+        const file = document.getElementById("docxFile").files[0];
+        if (!file) return alert("Select a .docx file!");
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          mammoth
+            .extractRawText({ arrayBuffer: e.target.result })
+            .then((res) => {
+              questions = parseQuestions(res.value);
+              if (questions.length === 0)
+                return alert("No valid questions found.");
+              userAnswers = new Array(questions.length).fill(null);
+              document.getElementById("uploadSection").style.display = "none";
+              document.getElementById("quizSection").style.display = "block";
+              initQuestionNumbers();
+              renderQuestion(0);
+            });
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      function parseQuestions(text) {
+        const lines = text
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l);
+        const qs = [],
+          reQ = /^Q\d+[\.\)]\s*/,
+          reOpt = /^([A-D])[\.\)]\s*(.*)/i,
+          reAns = /^Answer\s*:\s*([A-D])/i;
+        let curr = null;
+        for (let line of lines) {
+          if (reQ.test(line)) {
+            if (curr) qs.push(curr);
+            curr = {
+              question: line.replace(reQ, ""),
+              options: [],
+              answer: null,
+            };
+            continue;
+          }
+          let mOpt = line.match(reOpt);
+          if (mOpt && curr) {
+            curr.options.push(mOpt[2]);
+            continue;
+          }
+          let mAns = line.match(reAns);
+          if (mAns && curr) {
+            curr.answer = mAns[1].charCodeAt(0) - 65;
+            continue;
+          }
+        }
+        if (curr) qs.push(curr);
+        return qs.filter(
+          (q) => q.question && q.options.length >= 2 && q.answer !== null
+        );
+      }
+
+      function initQuestionNumbers() {
+        const numDiv = document.getElementById("questionNumbers");
+        numDiv.innerHTML = "";
+        questions.forEach((_, i) => {
+          let b = document.createElement("button");
+          b.textContent = i + 1;
+          b.onclick = () => {
+            clearInterval(timer);
+            renderQuestion(i);
+          };
+          numDiv.appendChild(b);
+        });
+      }
+
+      function renderQuestion(i) {
+        currentQuestionIndex = i;
+        let q = questions[i];
+        document.getElementById("questionText").textContent = `${i + 1}. ${
+          q.question
+        }`;
+        const opts = document.getElementById("optionsContainer");
+        opts.innerHTML = "";
+        q.options.forEach((opt, idx) => {
+          opts.innerHTML += `<label><input type="radio" name="option" value="${idx}"> ${opt}</label><br>`;
+        });
+        document
+          .querySelectorAll("#questionNumbers button")
+          .forEach((b, idx) => {
+            b.className =
+              idx === i
+                ? "active"
+                : userAnswers[idx] !== null
+                ? "answered"
+                : "";
+          });
+        startTimer();
+      }
+
+      function startTimer() {
+        timeLeft = 30;
+        document.getElementById(
+          "timer"
+        ).textContent = `Time left: ${timeLeft}s`;
+        clearInterval(timer);
+        timer = setInterval(() => {
+          timeLeft--;
+          document.getElementById(
+            "timer"
+          ).textContent = `Time left: ${timeLeft}s`;
+          if (timeLeft <= 0) {
+            clearInterval(timer);
+            saveAnswer(null);
+            nextQuestion();
+          }
+        }, 1000);
+      }
+
+      document
+        .getElementById("optionsContainer")
+        .addEventListener("change", (e) => {
+          if (e.target.name === "option") {
+            saveAnswer(parseInt(e.target.value));
+            clearInterval(timer);
+            nextQuestion();
+          }
+        });
+
+      function saveAnswer(ans) {
+        userAnswers[currentQuestionIndex] = ans;
+        score = userAnswers.reduce(
+          (s, a, i) => (a === questions[i].answer ? s + 1 : s),
+          0
+        );
+        document.getElementById("scoreDisplay").textContent = score;
+      }
+
+      document.getElementById("submitQuizBtn").onclick = () => {
+        if (confirm("Submit quiz?")) finishQuiz();
+      };
+
+      function nextQuestion() {
+        currentQuestionIndex < questions.length - 1
+          ? renderQuestion(currentQuestionIndex + 1)
+          : finishQuiz();
+      }
+
+      function finishQuiz() {
+        clearInterval(timer);
+        document.getElementById("quizSection").style.display = "none";
+        document.getElementById("resultSection").style.display = "block";
+        document.getElementById("finalScore").textContent = score;
+        document.getElementById("totalQuestions").textContent =
+          questions.length;
+        document.getElementById("resultName").textContent =
+          "Name: " + studentData.name;
+        document.getElementById("resultRoll").textContent =
+          "Roll No: " + studentData.roll;
+        document.getElementById("resultImage").src = studentData.imageSrc;
+      }
+
+      document.getElementById("downloadPdfBtn").onclick = () => {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        let y = 20;
+        doc.setFontSize(18).text("Quiz Result Summary", 70, y);
+        y += 10;
+        doc.setFontSize(14);
+        doc.text(`Name: ${studentData.name}`, 20, (y += 10));
+        doc.text(`Roll No: ${studentData.roll}`, 20, (y += 10));
+        doc.text(`Score: ${score} / ${questions.length}`, 20, (y += 10));
+        if (studentData.imageSrc)
+          doc.addImage(studentData.imageSrc, "JPEG", 140, 20, 50, 50);
+        y += 20;
+        doc.setFontSize(16).text("Question-wise Result:", 20, (y += 20));
+        doc.setFontSize(12);
+        questions.forEach((q, i) => {
+          if (y > 270) {
+            doc.addPage();
+            y = 20;
+          }
+          doc.text(`${i + 1}. ${q.question}`, 20, (y += 8));
+          const sel =
+            userAnswers[i] !== null
+              ? q.options[userAnswers[i]]
+              : "Not Answered";
+          const correct = q.options[q.answer];
+          const isCorrect = userAnswers[i] === q.answer;
+          doc.text(`Your Answer: ${sel}`, 25, (y += 6));
+          doc.text(`Correct Answer: ${correct}`, 25, (y += 6));
+          doc.text(
+            `Result: ${isCorrect ? "✔️ Correct" : "❌ Wrong"}`,
+            25,
+            (y += 6)
+          );
+          y += 4;
+        });
+        doc.save(`${studentData.roll}_Result_Report.pdf`);
+      };
+    </script>
+  </body>
+</html>
